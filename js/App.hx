@@ -1,6 +1,10 @@
+import haxe.macro.Expr.Catch;
+import js.html.Console;
+import js.lib.Promise;
 import bootstrap.Modal;
 import js.Browser;
 import Common;
+import utils.HttpUtil;
 // import thx.semver.Version;
 
 //React lib
@@ -136,6 +140,72 @@ class App {
 				</MuiThemeProvider>
 			</ReduxProvider>
 		'), node );
+	}
+
+	public function updateUserOrderQuantity(userId:Int, multiDistribId:Int, catalogId:Int, userOrderId: Int, basketId: Int, productQt:Float, nextQtInput:String, lastQt: String) : Promise<Void> {
+		var inputId = userOrderId + "_qt";
+		var input : js.html.InputElement = cast js.Browser.document.getElementById(inputId);
+		if (nextQtInput == lastQt) {
+			return Promise.resolve();
+		}
+		var nextQt = Std.parseFloat(StringTools.replace(nextQtInput, ',','.')) / productQt; // divide by productQt to get the decimal userOrder.qt
+		if (Math.isNaN(nextQt)) {
+			var input : js.html.InputElement = cast js.Browser.document.getElementById(inputId);
+			input.style.color = 'red';
+			return Promise.resolve();
+		}
+		input.style.color = 'gray';
+		var args = "";
+		if ( multiDistribId != null ) {
+			args +=  "?multiDistrib=" + multiDistribId;
+			if( catalogId != null ) {
+				args +=  "&catalog=" + catalogId;
+			}
+		}
+		else if ( catalogId != null ) {
+			args +=  "?catalog=" + catalogId;
+		}
+
+		return HttpUtil.fetch( "/api/order/updateOrderQuantity/" + userId + args, POST, { id: userOrderId, qt: nextQt }, JSON )
+		.then( function( data : Dynamic ) {
+			// var data : { success: Bool, subTotal: String, total: String, fees: String, basketTotal: String, nextQt: String } = tink.Json.parse(data);
+
+			input.style.color = 'initial';
+
+			var input : js.html.InputElement = cast js.Browser.document.getElementById(inputId);
+			var currency = "€";
+			try {	
+				var basketTotalInput = js.Browser.document.getElementById("basket_" + basketId + "_total");
+				currency = basketTotalInput.innerHTML.substr(-1, 1);
+				basketTotalInput.innerHTML = data.basketTotal + "&nbsp;" + currency;
+			} catch (e:Dynamic) {js.Browser.console.error(e);}
+			try {	
+				input.value = data.nextQt;
+				var qtTxt = js.Browser.document.getElementById(inputId + "_txt");
+				var unitArr = qtTxt.innerHTML.split("&nbsp;");
+				var unit = "";
+				if (unitArr.length > 1) unit = unitArr[1];
+				qtTxt.innerHTML = data.nextQt + "&nbsp;" + unit;
+			} catch (e:Dynamic) {js.Browser.console.error(e);}
+			try {	
+				js.Browser.document.getElementById(userOrderId + "_subTotal").innerHTML = data.subTotal + "&nbsp;" + currency;
+			} catch (e:Dynamic) {js.Browser.console.error(e);}
+			try {	
+				js.Browser.document.getElementById(userOrderId + "_total").innerHTML = data.total + "&nbsp;" + currency;
+			} catch (e:Dynamic) {js.Browser.console.error(e);}
+			try {	
+				js.Browser.document.getElementById(userOrderId + "_fees").innerHTML = data.fees == "" ? "" : data.fees + "&nbsp;" + currency;
+			} catch (e:Dynamic) {js.Browser.console.error(e);}
+		})
+		.catchError( function(data) {
+			var data = Std.string(data);
+			if( data.substr(0,1) == "{" ) { //json error from server
+				var data : ErrorInfos = haxe.Json.parse(data);                
+				Browser.alert( data.error.message );
+			} else { //js error
+				Browser.alert( data );
+			}
+		});
 	}
 
 	private function createOrderBoxReduxStore() {
@@ -360,6 +430,91 @@ class App {
         req.request();
     }
 
+
+    // implemention ported from https://developer.mozilla.org/en-US/docs/Web/Accessibility/ARIA/Roles/tab_role
+    // + add url control as window.location.search
+    public function handleAriaTabEvents() {
+        js.Browser.document.addEventListener("DOMContentLoaded", function(event) {
+            var tabs = Browser.document.querySelectorAll('[role="tab"]');
+            var tabList = Browser.document.querySelector('[role="tablist"]');
+            var search:String = Browser.window.location.search;
+
+            if (search != null && search != '') {
+                var target:js.html.Element = null;
+                
+                var target = Browser.document.getElementById(StringTools.replace(search, '?', ''));
+                if (target != null) {
+                    selectTab(target, target.parentElement, target.parentElement.parentElement);
+                }
+            }
+
+            // Add a click event handler to each tab
+            for (tab in tabs) {
+                tab.addEventListener('click', changeTabs);
+            }
+
+            // Enable arrow navigation between tabs in the tab list
+            var tabFocus:Int = 0;
+
+            tabList.addEventListener('keydown', function(e:js.html.KeyboardEvent) {
+                // Move right
+                if (e.key == 'ArrowRight' || e.key == 'ArrowLeft') {
+                    var tab:js.html.Element = cast tabs[tabFocus];
+                    tab.setAttribute('tabindex', '-1');
+                    if (e.key == 'ArrowRight') {
+                        tabFocus++;
+                        // If we're at the end, go to the start
+                        if (tabFocus >= tabs.length) {
+                            tabFocus = 0;
+                        }
+                        // Move left
+                    } else if (e.key == 'ArrowLeft') {
+                        tabFocus--;
+                        // If we're at the start, move to the end
+                        if (tabFocus < 0) {
+                            tabFocus = tabs.length - 1;
+                        }
+                    }
+
+                    tab.setAttribute('tabindex', '0');
+                    tab.focus();
+                }
+            });
+        });
+    }
+
+    function selectTab(target:js.html.Element, parent:js.html.Element, grandparent:js.html.Element) {
+        try {
+            // Remove all current selected tabs
+            var selectedTabs = parent.querySelectorAll('[aria-selected="true"]');
+            for (t in selectedTabs) {
+                cast(t, js.html.Element).setAttribute('aria-selected', 'false');
+            }
+
+            // Set this tab as selected
+            target.setAttribute('aria-selected', 'true');
+
+            // Hide all tab panels
+            var panels = grandparent.querySelectorAll('[role="tabpanel"]');
+            for (p in panels) {
+                cast(p, js.html.Element).setAttribute('hidden', 'true');
+            }
+
+            // Show the selected panel
+            grandparent.parentElement.querySelector('#' + target.getAttribute('aria-controls')).removeAttribute('hidden');
+        } catch (e:Dynamic) {
+            js.Browser.console.log("Error:" + e);
+        }
+    }
+
+    function changeTabs(e:js.html.Event) {
+        var target = cast(e.currentTarget, js.html.Element);
+        var parent = target.parentElement;
+        var grandparent = parent.parentElement;
+        selectTab(target, parent, grandparent);
+        var urlUpdated:String = Browser.window.location.protocol + "//" + Browser.window.location.host + Browser.window.location.pathname + '?' + target.getAttribute('id');
+        Browser.window.history.replaceState({path: urlUpdated}, '', urlUpdated);
+    }
 }
 
 
